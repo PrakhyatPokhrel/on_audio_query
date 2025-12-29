@@ -6,10 +6,15 @@ import android.content.ContentValues
 import android.os.Build
 import android.provider.MediaStore
 import android.util.Log
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import com.lucasjosino.on_audio_query.PluginProvider
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** OnPlaylistsController */
-class PlaylistController {
+class PlaylistController : ViewModel() {
 
     //Main parameters
     private val uri = MediaStore.Audio.Playlists.EXTERNAL_CONTENT_URI
@@ -33,7 +38,7 @@ class PlaylistController {
 
         //For create we don't check if name already exist
         contentValues.put(MediaStore.Audio.Playlists.NAME, playlistName)
-        contentValues.put(MediaStore.Audio.Playlists.DATE_ADDED, System.currentTimeMillis())
+        contentValues.put(MediaStore.Audio.Playlists.DATE_ADDED, System.currentTimeMillis() / 1000)
         resolver.insert(uri, contentValues)
         result.success(true)
     }
@@ -43,12 +48,17 @@ class PlaylistController {
         this.resolver = context.contentResolver
         val playlistId = call.argument<Number>("playlistId")?.toLong() ?: 0L
 
-        //Check if Playlist exists based in Id
-        if (!checkPlaylistId(playlistId)) result.success(false)
-        else {
-            val delUri = ContentUris.withAppendedId(uri, playlistId)
-            resolver.delete(delUri, null, null)
-            result.success(true)
+        viewModelScope.launch {
+            //Check if Playlist exists based in Id
+            if (!checkPlaylistId(playlistId)) {
+                result.success(false)
+            } else {
+                withContext(Dispatchers.IO) {
+                    val delUri = ContentUris.withAppendedId(uri, playlistId)
+                    resolver.delete(delUri, null, null)
+                }
+                result.success(true)
+            }
         }
     }
 
@@ -56,95 +66,106 @@ class PlaylistController {
     //TODO Fix error on Android 10
     fun addToPlaylist() {
         this.resolver = context.contentResolver
-        val playlistId = call.argument<Int>("playlistId")!!
-        val audioId = call.argument<Int>("audioId")!!
+        val playlistId = call.argument<Number>("playlistId")?.toLong() ?: return result.success(false)
+        val audioId = call.argument<Number>("audioId")?.toLong() ?: return result.success(false)
 
-
-        //Check if Playlist exists based in Id
-        if (!checkPlaylistId(playlistId)) result.success(false)
-        else {
-            val uri =
-                MediaStore.Audio.Playlists.Members.getContentUri("external", playlistId.toLong())
-            //If Android is Q/10 or above "count(*)" don't count, so, we use other method.
-            val columnsBasedOnVersion = if (Build.VERSION.SDK_INT < 29) columns else null
-            val cursor = resolver.query(uri, columnsBasedOnVersion, null, null, null)
-            var count = -1
-            while (cursor != null && cursor.moveToNext()) {
-                count += if (Build.VERSION.SDK_INT < 29) cursor.count else cursor.getInt(0)
-            }
-            cursor?.close()
-            //
-            try {
-                contentValues.put(MediaStore.Audio.Playlists.Members.PLAY_ORDER, count + 1)
-                contentValues.put(MediaStore.Audio.Playlists.Members.AUDIO_ID, audioId.toLong())
-                resolver.insert(uri, contentValues)
+        viewModelScope.launch {
+            //Check if Playlist exists based in Id
+            if (!checkPlaylistId(playlistId)) {
+                result.success(false)
+            } else {
+                withContext(Dispatchers.IO) {
+                    val membersUri = MediaStore.Audio.Playlists.Members.getContentUri("external", playlistId)
+                    //If Android is Q/10 or above "count(*)" don't count, so, we use other method.
+                    val columnsBasedOnVersion = if (Build.VERSION.SDK_INT < 29) columns else null
+                    val cursor = resolver.query(membersUri, columnsBasedOnVersion, null, null, null)
+                    var count = -1
+                    while (cursor != null && cursor.moveToNext()) {
+                        count += if (Build.VERSION.SDK_INT < 29) cursor.count else cursor.getInt(0)
+                    }
+                    cursor?.close()
+                    //
+                    try {
+                        contentValues.clear()
+                        contentValues.put(MediaStore.Audio.Playlists.Members.PLAY_ORDER, count + 1)
+                        contentValues.put(MediaStore.Audio.Playlists.Members.AUDIO_ID, audioId)
+                        resolver.insert(membersUri, contentValues)
+                    } catch (e: Exception) {
+                        Log.i(channelError, e.toString())
+                    }
+                }
                 result.success(true)
-            } catch (e: Exception) {
-                Log.i(channelError, e.toString())
             }
         }
     }
 
-    //TODO Add option to use a list
+    // Exhaustive remove method (VER 6)
     fun removeFromPlaylist() {
         this.resolver = context.contentResolver
         val playlistId = call.argument<Number>("playlistId")?.toLong() ?: return result.success(false)
         val audioId = call.argument<Number>("audioId")?.toLong() ?: return result.success(false)
         
-        Log.d("on_audio_query", "removeFromPlaylist [VER 5]: Starting. Playlist: $playlistId, ID: $audioId")
+        Log.d("on_audio_query", "removeFromPlaylist [VER 6]: Request - Playlist: $playlistId, ID: $audioId")
 
-        // 1. Validate Playlist
-        if (!checkPlaylistId(playlistId)) {
-            Log.w("on_audio_query", "removeFromPlaylist [VER 5]: Playlist $playlistId not found")
-            result.success(false)
-            return
-        }
+        viewModelScope.launch {
+            if (!checkPlaylistId(playlistId)) {
+                Log.w("on_audio_query", "removeFromPlaylist [VER 6]: Playlist $playlistId not found")
+                result.success(false)
+                return@launch
+            }
 
-        try {
-            val membersUri = MediaStore.Audio.Playlists.Members.getContentUri("external", playlistId)
-            
-            // 2. Search for the member entries. 
-            // This handles cases where audioId is either the Song ID (AUDIO_ID) or the Record ID (_ID).
-            val projection = arrayOf(
-                MediaStore.Audio.Playlists.Members._ID,
-                MediaStore.Audio.Playlists.Members.AUDIO_ID
-            )
-            
-            val cursor = resolver.query(membersUri, projection, null, null, null)
-            val idsToDelete = mutableListOf<Long>()
-            
-            while (cursor != null && cursor.moveToNext()) {
-                val memberId = cursor.getLong(0)
-                val songId = cursor.getLong(1)
-                
-                // If the provided audioId matches either the entry itself or the underlying song
-                if (memberId == audioId || songId == audioId) {
-                    idsToDelete.add(memberId)
+            val success = withContext(Dispatchers.IO) {
+                try {
+                    val membersUri = MediaStore.Audio.Playlists.Members.getContentUri("external", playlistId)
+                    
+                    // 1. Search for matching entries
+                    val projection = arrayOf(
+                        MediaStore.Audio.Playlists.Members._ID,
+                        MediaStore.Audio.Playlists.Members.AUDIO_ID
+                    )
+                    
+                    val cursor = resolver.query(membersUri, projection, null, null, null)
+                    val idsToDelete = mutableListOf<Long>()
+                    
+                    Log.d("on_audio_query", "removeFromPlaylist [VER 6]: Scanning members...")
+                    while (cursor != null && cursor.moveToNext()) {
+                        val mId = cursor.getLong(0)
+                        val sId = cursor.getLong(1)
+                        Log.v("on_audio_query", "   Member: _ID=$mId, AUDIO_ID=$sId")
+                        if (mId == audioId || sId == audioId) {
+                            idsToDelete.add(mId)
+                        }
+                    }
+                    cursor?.close()
+                    
+                    if (idsToDelete.isEmpty()) {
+                        Log.w("on_audio_query", "removeFromPlaylist [VER 6]: ID $audioId not found in playlist $playlistId")
+                        return@withContext false
+                    }
+
+                    // 2. Aggressive deletion
+                    var totalDeleted = 0
+                    for (id in idsToDelete) {
+                        // Method A: Deletion by Item URI
+                        val itemUri = ContentUris.withAppendedId(membersUri, id)
+                        var d = resolver.delete(itemUri, null, null)
+                        
+                        // Method B: Deletion by Selection (Fallback)
+                        if (d == 0) {
+                            d = resolver.delete(membersUri, "${MediaStore.Audio.Playlists.Members._ID} = ?", arrayOf(id.toString()))
+                        }
+                        
+                        totalDeleted += d
+                        Log.d("on_audio_query", "removeFromPlaylist [VER 6]: Deleted record $id - result: $d")
+                    }
+                    
+                    totalDeleted > 0
+                } catch (e: Exception) {
+                    Log.e("on_audio_error", "removeFromPlaylist [VER 6]: Error", e)
+                    false
                 }
             }
-            cursor?.close()
-            
-            Log.d("on_audio_query", "removeFromPlaylist [VER 5]: Found ${idsToDelete.size} matching records to remove")
-
-            if (idsToDelete.isEmpty()) {
-                Log.w("on_audio_query", "removeFromPlaylist [VER 5]: No matching records found in playlist")
-                result.success(false)
-                return
-            }
-
-            // 3. Delete each matching entry by its specific URI
-            var totalDeleted = 0
-            for (id in idsToDelete) {
-                val itemUri = ContentUris.withAppendedId(membersUri, id)
-                val d = resolver.delete(itemUri, null, null)
-                totalDeleted += d
-                Log.d("on_audio_query", "removeFromPlaylist [VER 5]: Deleting member $id - result: $d")
-            }
-
-            result.success(totalDeleted > 0)
-        } catch (e: Exception) {
-            Log.e("on_audio_error", "removeFromPlaylist [VER 5]: Error occurred", e)
-            result.success(false)
+            result.success(success)
         }
     }
 
@@ -155,11 +176,15 @@ class PlaylistController {
         val from = call.argument<Int>("from")!!
         val to = call.argument<Int>("to")!!
 
-        //Check if Playlist exists based in Id
-        if (!checkPlaylistId(playlistId)) result.success(false)
-        else {
-            MediaStore.Audio.Playlists.Members.moveItem(resolver, playlistId, from, to)
-            result.success(true)
+        viewModelScope.launch {
+            if (!checkPlaylistId(playlistId)) {
+                result.success(false)
+            } else {
+                withContext(Dispatchers.IO) {
+                    MediaStore.Audio.Playlists.Members.moveItem(resolver, playlistId, from, to)
+                }
+                result.success(true)
+            }
         }
     }
 
@@ -169,29 +194,33 @@ class PlaylistController {
         val playlistId = call.argument<Number>("playlistId")?.toLong() ?: return result.success(false)
         val newPlaylistName = call.argument<String>("newPlName")!!
 
-        //Check if Playlist exists based in Id
-        if (!checkPlaylistId(playlistId)) result.success(false)
-        else {
-            contentValues.clear()
-            contentValues.put(MediaStore.Audio.Playlists.NAME, newPlaylistName)
-            contentValues.put(MediaStore.Audio.Playlists.DATE_MODIFIED, System.currentTimeMillis() / 1000)
-            resolver.update(uri, contentValues, "_id=$playlistId", null)
-            result.success(true)
+        viewModelScope.launch {
+            if (!checkPlaylistId(playlistId)) {
+                result.success(false)
+            } else {
+                withContext(Dispatchers.IO) {
+                    contentValues.clear()
+                    contentValues.put(MediaStore.Audio.Playlists.NAME, newPlaylistName)
+                    contentValues.put(MediaStore.Audio.Playlists.DATE_MODIFIED, System.currentTimeMillis() / 1000)
+                    resolver.update(uri, contentValues, "_id=$playlistId", null)
+                }
+                result.success(true)
+            }
         }
     }
 
     //Return true if playlist already exist, false if don't exist
-    private fun checkPlaylistId(plId: Long): Boolean {
+    private suspend fun checkPlaylistId(plId: Long): Boolean = withContext(Dispatchers.IO) {
         val cursor = resolver.query(
             uri,
             arrayOf(MediaStore.Audio.Playlists._ID),
-            MediaStore.Audio.Playlists._ID + "=?",
+            "${MediaStore.Audio.Playlists._ID} = ?",
             arrayOf(plId.toString()),
             null
         )
         val exists = cursor != null && cursor.count > 0
         cursor?.close()
-        return exists
+        exists
     }
 }
 
