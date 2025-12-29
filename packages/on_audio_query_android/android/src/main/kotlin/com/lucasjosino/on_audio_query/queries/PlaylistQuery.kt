@@ -180,7 +180,7 @@ class PlaylistQuery : ViewModel() {
                     while (cursor != null && cursor.moveToNext()) {
                         val mId = cursor.getLong(0)
                         val sId = cursor.getLong(1)
-                        Log.v(TAG, "   Member: _ID=$mId, AUDIO_ID=$sId")
+                        Log.d(TAG, "   Member: _ID=$mId, AUDIO_ID=$sId")
                         if (mId == audioId || sId == audioId) {
                             idsToDelete.add(mId)
                         }
