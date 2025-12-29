@@ -145,7 +145,7 @@ class PlaylistQuery : ViewModel() {
         }
     }
 
-    // Exhaustive remove method (VER 7)
+    // Exhaustive remove method (VER 8)
     fun removeFromPlaylist() {
         val call = PluginProvider.call()
         val result = PluginProvider.result()
@@ -154,17 +154,28 @@ class PlaylistQuery : ViewModel() {
         val playlistId = call.argument<Number>("playlistId")?.toLong() ?: return result.success(false)
         val audioId = call.argument<Number>("audioId")?.toLong() ?: return result.success(false)
         
-        Log.d(TAG, "removeFromPlaylist [VER 7]: Request - Playlist: $playlistId, ID: $audioId")
+        Log.w(TAG, "removeFromPlaylist [VER 8]: Request - Playlist: $playlistId, ID: $audioId")
 
         viewModelScope.launch {
             if (!checkPlaylistId(playlistId)) {
-                Log.w(TAG, "removeFromPlaylist [VER 7]: Playlist $playlistId not found")
+                Log.w(TAG, "removeFromPlaylist [VER 8]: Playlist $playlistId not found")
                 result.success(false)
                 return@launch
             }
 
             val success = withContext(Dispatchers.IO) {
                 try {
+                    // Check ownership if possible (Android Q+)
+                    if (Build.VERSION.SDK_INT >= 29) {
+                        val plUri = ContentUris.withAppendedId(MediaStore.Audio.Playlists.EXTERNAL_CONTENT_URI, playlistId)
+                        val plCursor = resolver.query(plUri, arrayOf(MediaStore.Audio.Playlists.OWNER_PACKAGE_NAME), null, null, null)
+                        if (plCursor != null && plCursor.moveToFirst()) {
+                            val owner = plCursor.getString(0)
+                            Log.w(TAG, "removeFromPlaylist [VER 8]: Playlist Owner: $owner")
+                        }
+                        plCursor?.close()
+                    }
+
                     val membersUri = MediaStore.Audio.Playlists.Members.getContentUri("external", playlistId)
                     
                     // 1. Search for matching entries
@@ -176,53 +187,57 @@ class PlaylistQuery : ViewModel() {
                     val cursor = resolver.query(membersUri, projection, null, null, null)
                     val idsToDelete = mutableListOf<Long>()
                     
-                    Log.d(TAG, "removeFromPlaylist [VER 7]: Scanning members...")
+                    Log.w(TAG, "removeFromPlaylist [VER 8]: Scanning members...")
                     while (cursor != null && cursor.moveToNext()) {
                         val mId = cursor.getLong(0)
                         val sId = cursor.getLong(1)
-                        Log.d(TAG, "   Member: _ID=$mId, AUDIO_ID=$sId")
                         if (mId == audioId || sId == audioId) {
+                            Log.w(TAG, "   Member Found: _ID=$mId, AUDIO_ID=$sId")
                             idsToDelete.add(mId)
                         }
                     }
                     cursor?.close()
                     
                     if (idsToDelete.isEmpty()) {
-                        Log.w(TAG, "removeFromPlaylist [VER 7]: ID $audioId not found in playlist $playlistId")
+                        Log.w(TAG, "removeFromPlaylist [VER 8]: ID $audioId not found in playlist $playlistId during scan")
                         return@withContext false
                     }
 
                     // 2. Aggressive deletion
                     var totalDeleted = 0
                     for (id in idsToDelete) {
-                        // Method A: Deletion by Item URI
-                        val itemUri = ContentUris.withAppendedId(membersUri, id)
-                        var d = resolver.delete(itemUri, null, null)
-                        
-                        // Method B: Deletion by Selection (Fallback)
-                        if (d == 0) {
-                            d = resolver.delete(membersUri, "${MediaStore.Audio.Playlists.Members._ID} = ?", arrayOf(id.toString()))
+                        try {
+                             // Method A: Deletion by Item URI
+                            val itemUri = ContentUris.withAppendedId(membersUri, id)
+                            var d = resolver.delete(itemUri, null, null)
+                            
+                            // Method B: Deletion by Selection (Fallback)
+                            if (d == 0) {
+                                d = resolver.delete(membersUri, "${MediaStore.Audio.Playlists.Members._ID} = ?", arrayOf(id.toString()))
+                            }
+                            
+                            totalDeleted += d
+                            Log.w(TAG, "removeFromPlaylist [VER 8]: Deleted record $id - result: $d")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "removeFromPlaylist [VER 8]: Error deleting individual $id", e)
                         }
-                        
-                        totalDeleted += d
-                        Log.d(TAG, "removeFromPlaylist [VER 7]: Deleted record $id - result: $d")
                     }
                     
                     // Method C: Fallback to bulk delete by AUDIO_ID if individual deletion failed
                     if (totalDeleted == 0) {
-                        Log.w(TAG, "removeFromPlaylist [VER 7]: Individual deletion failed, trying bulk delete by AUDIO_ID...")
+                        Log.w(TAG, "removeFromPlaylist [VER 8]: Individual deletion failed, trying bulk delete by AUDIO_ID...")
                         val d = resolver.delete(
                             membersUri,
                             "${MediaStore.Audio.Playlists.Members.AUDIO_ID} = ?",
                             arrayOf(audioId.toString())
                         )
                         totalDeleted += d
-                        Log.d(TAG, "removeFromPlaylist [VER 7]: Bulk deletion result: $d")
+                        Log.w(TAG, "removeFromPlaylist [VER 8]: Bulk deletion result: $d")
                     }
                     
                     totalDeleted > 0
                 } catch (e: Exception) {
-                    Log.e(TAG, "removeFromPlaylist [VER 7]: Error", e)
+                    Log.e(TAG, "removeFromPlaylist [VER 8]: Error", e)
                     false
                 }
             }
