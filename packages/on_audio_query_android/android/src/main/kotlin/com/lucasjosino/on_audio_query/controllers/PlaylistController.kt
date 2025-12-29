@@ -100,7 +100,15 @@ class PlaylistController {
                     playlistId.toLong()
                 )
                 val where = MediaStore.Audio.Playlists.Members._ID + "=?"
-                resolver.delete(uri, where, arrayOf(audioId.toString()))
+                val deleted = resolver.delete(uri, where, arrayOf(audioId.toString()))
+
+                // If nothing was deleted using _ID, try using AUDIO_ID.
+                // This handles cases where the user passes the song ID instead of the member ID.
+                if (deleted == 0) {
+                    val whereAudio = MediaStore.Audio.Playlists.Members.AUDIO_ID + "=?"
+                    resolver.delete(uri, whereAudio, arrayOf(audioId.toString()))
+                }
+
                 result.success(true)
             } catch (e: Exception) {
                 Log.i("on_audio_error: ", e.toString())
