@@ -145,7 +145,7 @@ class PlaylistQuery : ViewModel() {
         }
     }
 
-    // Exhaustive remove method (VER 8)
+    // Exhaustive remove method (VER 9)
     fun removeFromPlaylist() {
         val call = PluginProvider.call()
         val result = PluginProvider.result()
@@ -154,28 +154,17 @@ class PlaylistQuery : ViewModel() {
         val playlistId = call.argument<Number>("playlistId")?.toLong() ?: return result.success(false)
         val audioId = call.argument<Number>("audioId")?.toLong() ?: return result.success(false)
         
-        Log.w(TAG, "removeFromPlaylist [VER 8]: Request - Playlist: $playlistId, ID: $audioId")
+        Log.w(TAG, "removeFromPlaylist [VER 9]: Request - Playlist: $playlistId, ID: $audioId")
 
         viewModelScope.launch {
             if (!checkPlaylistId(playlistId)) {
-                Log.w(TAG, "removeFromPlaylist [VER 8]: Playlist $playlistId not found")
+                Log.w(TAG, "removeFromPlaylist [VER 9]: Playlist $playlistId not found")
                 result.success(false)
                 return@launch
             }
 
             val success = withContext(Dispatchers.IO) {
                 try {
-                    // Check ownership if possible (Android Q+)
-                    if (Build.VERSION.SDK_INT >= 29) {
-                        val plUri = ContentUris.withAppendedId(MediaStore.Audio.Playlists.EXTERNAL_CONTENT_URI, playlistId)
-                        val plCursor = resolver.query(plUri, arrayOf(MediaStore.Audio.Playlists.OWNER_PACKAGE_NAME), null, null, null)
-                        if (plCursor != null && plCursor.moveToFirst()) {
-                            val owner = plCursor.getString(0)
-                            Log.w(TAG, "removeFromPlaylist [VER 8]: Playlist Owner: $owner")
-                        }
-                        plCursor?.close()
-                    }
-
                     val membersUri = MediaStore.Audio.Playlists.Members.getContentUri("external", playlistId)
                     
                     // 1. Search for matching entries
@@ -187,7 +176,7 @@ class PlaylistQuery : ViewModel() {
                     val cursor = resolver.query(membersUri, projection, null, null, null)
                     val idsToDelete = mutableListOf<Long>()
                     
-                    Log.w(TAG, "removeFromPlaylist [VER 8]: Scanning members...")
+                    Log.w(TAG, "removeFromPlaylist [VER 9]: Scanning members...")
                     while (cursor != null && cursor.moveToNext()) {
                         val mId = cursor.getLong(0)
                         val sId = cursor.getLong(1)
@@ -199,12 +188,14 @@ class PlaylistQuery : ViewModel() {
                     cursor?.close()
                     
                     if (idsToDelete.isEmpty()) {
-                        Log.w(TAG, "removeFromPlaylist [VER 8]: ID $audioId not found in playlist $playlistId during scan")
+                        Log.w(TAG, "removeFromPlaylist [VER 9]: ID $audioId not found in playlist $playlistId during scan")
                         return@withContext false
                     }
 
                     // 2. Aggressive deletion
                     var totalDeleted = 0
+                    val failedUris = mutableListOf<Uri>()
+
                     for (id in idsToDelete) {
                         try {
                              // Method A: Deletion by Item URI
@@ -216,32 +207,74 @@ class PlaylistQuery : ViewModel() {
                                 d = resolver.delete(membersUri, "${MediaStore.Audio.Playlists.Members._ID} = ?", arrayOf(id.toString()))
                             }
                             
+                            if (d == 0) {
+                                // Capture failed URI for scoped storage request
+                                failedUris.add(itemUri)
+                            }
+
                             totalDeleted += d
-                            Log.w(TAG, "removeFromPlaylist [VER 8]: Deleted record $id - result: $d")
+                            Log.w(TAG, "removeFromPlaylist [VER 9]: Deleted record $id - result: $d")
                         } catch (e: Exception) {
-                            Log.e(TAG, "removeFromPlaylist [VER 8]: Error deleting individual $id", e)
+                            Log.e(TAG, "removeFromPlaylist [VER 9]: Error deleting individual $id", e)
                         }
                     }
                     
                     // Method C: Fallback to bulk delete by AUDIO_ID if individual deletion failed
-                    if (totalDeleted == 0) {
-                        Log.w(TAG, "removeFromPlaylist [VER 8]: Individual deletion failed, trying bulk delete by AUDIO_ID...")
+                    if (totalDeleted == 0 && failedUris.isNotEmpty()) {
+                         // On Android 11+ (R), if we failed to delete, we might need to request permission.
+                         if (Build.VERSION.SDK_INT >= 30) {
+                             Log.w(TAG, "removeFromPlaylist [VER 9]: Deletion failed. Creating delete request for ${failedUris.size} items.")
+                             
+                             try {
+                                 // Note: createDeleteRequest requires a list of URIs. 
+                                 // For playlist members, we should use the specific member URIs we collected.
+                                 val pendingIntent = MediaStore.createDeleteRequest(resolver, failedUris)
+                                 
+                                 // We need to launch this intent.
+                                 val activity = PluginProvider.activity()
+                                 PluginProvider.pendingResult = result
+                                 
+                                 // REQUEST_CODE_DELETE = 8856 defined in OnAudioQueryPlugin
+                                 activity.startIntentSenderForResult(
+                                     pendingIntent.intentSender,
+                                     8856,
+                                     null,
+                                     0,
+                                     0,
+                                     0
+                                 )
+                                 
+                                 // We return true here to signal 'waiting for result'.
+                                 // The actual Result.success() will be called in OnAudioQueryPlugin.onActivityResult
+                                 return@withContext true
+                             } catch (e: Exception) {
+                                 Log.e(TAG, "removeFromPlaylist [VER 9]: Failed to create delete request", e)
+                             }
+                         }
+
+                        Log.w(TAG, "removeFromPlaylist [VER 9]: Individual deletion failed, trying bulk delete by AUDIO_ID...")
                         val d = resolver.delete(
                             membersUri,
                             "${MediaStore.Audio.Playlists.Members.AUDIO_ID} = ?",
                             arrayOf(audioId.toString())
                         )
                         totalDeleted += d
-                        Log.w(TAG, "removeFromPlaylist [VER 8]: Bulk deletion result: $d")
+                        Log.w(TAG, "removeFromPlaylist [VER 9]: Bulk deletion result: $d")
                     }
                     
+                    // If we launched the intent, we already returned inside the if block.
+                    // If we are here, we either succeeded or failed without intent.
                     totalDeleted > 0
                 } catch (e: Exception) {
-                    Log.e(TAG, "removeFromPlaylist [VER 8]: Error", e)
+                    Log.e(TAG, "removeFromPlaylist [VER 9]: Error", e)
                     false
                 }
             }
-            result.success(success)
+            
+            // Only send result here if we didn't set pendingResult (meaning we didn't start an activity)
+            if (PluginProvider.pendingResult == null) {
+                result.success(success)
+            }
         }
     }
 

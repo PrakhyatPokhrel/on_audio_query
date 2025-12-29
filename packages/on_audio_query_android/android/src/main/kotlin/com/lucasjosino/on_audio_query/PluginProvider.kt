@@ -93,5 +93,10 @@ object PluginProvider {
         return this.result.get() ?: throw UninitializedPluginProviderException(ERROR_MESSAGE)
     }
 
+    // Add a place to store the result that is waiting for onActivityResult
+    var pendingResult: MethodChannel.Result? = null
+    // Add a place to store if we are doing a custom behavior (like checking if deletion worked)
+    var pendingResultCustom: Boolean = false
+
     class UninitializedPluginProviderException(msg: String) : Exception(msg)
 }

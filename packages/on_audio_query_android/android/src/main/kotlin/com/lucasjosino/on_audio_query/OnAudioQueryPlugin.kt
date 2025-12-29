@@ -27,8 +27,9 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
+import io.flutter.plugin.common.PluginRegistry
 
-class OnAudioQueryPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
+class OnAudioQueryPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, PluginRegistry.ActivityResultListener {
 
     init {
         // Set default logging level
@@ -40,7 +41,11 @@ class OnAudioQueryPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         private const val TAG: String = "OnAudioQueryPlugin"
 
         // Method channel name.
+        // Method channel name.
         private const val CHANNEL_NAME = "com.lucasjosino.on_audio_query"
+        
+        // Request code for delete permission (Scoped Storage)
+        const val REQUEST_CODE_DELETE = 8856
     }
 
     private var permissionController = PermissionController()
@@ -161,6 +166,7 @@ class OnAudioQueryPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         // Add to controller the permission to listen to the request result.
         this.binding = binding
         binding.addRequestPermissionsResultListener(permissionController)
+        binding.addActivityResultListener(this)
     }
 
     override fun onDetachedFromActivityForConfigChanges() {
@@ -180,9 +186,31 @@ class OnAudioQueryPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         // Remove the permission listener
         if (binding != null) {
             binding!!.removeRequestPermissionsResultListener(permissionController)
+            binding!!.removeActivityResultListener(this)
         }
 
         this.binding = null
         Log.i(TAG, "Removed all declared methods")
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?): Boolean {
+        if (requestCode == REQUEST_CODE_DELETE) {
+            val pendingResult = PluginProvider.pendingResult
+            if (pendingResult != null) {
+                if (resultCode == android.app.Activity.RESULT_OK) {
+                    // If result is OK, it means user granted permission.
+                    // We can either return true, or if we were waiting for verification, check again.
+                    // For now, if the user said YES to the system dialog, we assume success or that the system did the delete.
+                    Log.i(TAG, "User granted permission for deletion")
+                    pendingResult.success(true)
+                } else {
+                    Log.w(TAG, "User denied permission for deletion")
+                    pendingResult.success(false)
+                }
+                PluginProvider.pendingResult = null
+                return true
+            }
+        }
+        return false
     }
 }
