@@ -20,12 +20,12 @@ class MethodController() {
             Method.QUERY_WITH_FILTERS -> WithFiltersQuery().queryWithFilters()
             Method.QUERY_ALL_PATHS -> AllPathQuery().queryAllPath()
             //Playlists methods
-            Method.CREATE_PLAYLIST -> PlaylistController().createPlaylist()
-            Method.REMOVE_PLAYLIST -> PlaylistController().removePlaylist()
-            Method.ADD_TO_PLAYLIST -> PlaylistController().addToPlaylist()
-            Method.REMOVE_FROM_PLAYLIST -> PlaylistController().removeFromPlaylist()
-            Method.RENAME_PLAYLIST -> PlaylistController().renamePlaylist()
-            Method.MOVE_ITEM_TO -> PlaylistController().moveItemTo()
+            Method.CREATE_PLAYLIST -> PlaylistQuery().createPlaylist()
+            Method.REMOVE_PLAYLIST -> PlaylistQuery().removePlaylist()
+            Method.ADD_TO_PLAYLIST -> PlaylistQuery().addToPlaylist()
+            Method.REMOVE_FROM_PLAYLIST -> PlaylistQuery().removeFromPlaylist()
+            Method.RENAME_PLAYLIST -> PlaylistQuery().renamePlaylist()
+            Method.MOVE_ITEM_TO -> PlaylistQuery().moveItemTo()
             else -> PluginProvider.result().notImplemented()
         }
     }
