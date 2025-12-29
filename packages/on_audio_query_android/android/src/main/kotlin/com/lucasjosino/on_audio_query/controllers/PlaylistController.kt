@@ -6,15 +6,16 @@ import android.content.ContentValues
 import android.os.Build
 import android.provider.MediaStore
 import android.util.Log
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
 import com.lucasjosino.on_audio_query.PluginProvider
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** OnPlaylistsController */
-class PlaylistController : ViewModel() {
+class PlaylistController {
+
+    private val scope = CoroutineScope(Dispatchers.Main)
 
     //Main parameters
     private val uri = MediaStore.Audio.Playlists.EXTERNAL_CONTENT_URI
@@ -48,7 +49,7 @@ class PlaylistController : ViewModel() {
         this.resolver = context.contentResolver
         val playlistId = call.argument<Number>("playlistId")?.toLong() ?: 0L
 
-        viewModelScope.launch {
+        scope.launch {
             //Check if Playlist exists based in Id
             if (!checkPlaylistId(playlistId)) {
                 result.success(false)
@@ -69,7 +70,7 @@ class PlaylistController : ViewModel() {
         val playlistId = call.argument<Number>("playlistId")?.toLong() ?: return result.success(false)
         val audioId = call.argument<Number>("audioId")?.toLong() ?: return result.success(false)
 
-        viewModelScope.launch {
+        scope.launch {
             //Check if Playlist exists based in Id
             if (!checkPlaylistId(playlistId)) {
                 result.success(false)
@@ -107,7 +108,7 @@ class PlaylistController : ViewModel() {
         
         Log.d("on_audio_query", "removeFromPlaylist [VER 6]: Request - Playlist: $playlistId, ID: $audioId")
 
-        viewModelScope.launch {
+        scope.launch {
             if (!checkPlaylistId(playlistId)) {
                 Log.w("on_audio_query", "removeFromPlaylist [VER 6]: Playlist $playlistId not found")
                 result.success(false)
@@ -176,7 +177,7 @@ class PlaylistController : ViewModel() {
         val from = call.argument<Int>("from")!!
         val to = call.argument<Int>("to")!!
 
-        viewModelScope.launch {
+        scope.launch {
             if (!checkPlaylistId(playlistId)) {
                 result.success(false)
             } else {
@@ -194,7 +195,7 @@ class PlaylistController : ViewModel() {
         val playlistId = call.argument<Number>("playlistId")?.toLong() ?: return result.success(false)
         val newPlaylistName = call.argument<String>("newPlName")!!
 
-        viewModelScope.launch {
+        scope.launch {
             if (!checkPlaylistId(playlistId)) {
                 result.success(false)
             } else {
