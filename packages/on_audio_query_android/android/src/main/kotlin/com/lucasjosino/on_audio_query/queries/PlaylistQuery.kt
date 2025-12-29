@@ -145,7 +145,7 @@ class PlaylistQuery : ViewModel() {
         }
     }
 
-    // Exhaustive remove method (VER 6)
+    // Exhaustive remove method (VER 7)
     fun removeFromPlaylist() {
         val call = PluginProvider.call()
         val result = PluginProvider.result()
@@ -154,11 +154,11 @@ class PlaylistQuery : ViewModel() {
         val playlistId = call.argument<Number>("playlistId")?.toLong() ?: return result.success(false)
         val audioId = call.argument<Number>("audioId")?.toLong() ?: return result.success(false)
         
-        Log.d(TAG, "removeFromPlaylist [VER 6]: Request - Playlist: $playlistId, ID: $audioId")
+        Log.d(TAG, "removeFromPlaylist [VER 7]: Request - Playlist: $playlistId, ID: $audioId")
 
         viewModelScope.launch {
             if (!checkPlaylistId(playlistId)) {
-                Log.w(TAG, "removeFromPlaylist [VER 6]: Playlist $playlistId not found")
+                Log.w(TAG, "removeFromPlaylist [VER 7]: Playlist $playlistId not found")
                 result.success(false)
                 return@launch
             }
@@ -176,7 +176,7 @@ class PlaylistQuery : ViewModel() {
                     val cursor = resolver.query(membersUri, projection, null, null, null)
                     val idsToDelete = mutableListOf<Long>()
                     
-                    Log.d(TAG, "removeFromPlaylist [VER 6]: Scanning members...")
+                    Log.d(TAG, "removeFromPlaylist [VER 7]: Scanning members...")
                     while (cursor != null && cursor.moveToNext()) {
                         val mId = cursor.getLong(0)
                         val sId = cursor.getLong(1)
@@ -188,7 +188,7 @@ class PlaylistQuery : ViewModel() {
                     cursor?.close()
                     
                     if (idsToDelete.isEmpty()) {
-                        Log.w(TAG, "removeFromPlaylist [VER 6]: ID $audioId not found in playlist $playlistId")
+                        Log.w(TAG, "removeFromPlaylist [VER 7]: ID $audioId not found in playlist $playlistId")
                         return@withContext false
                     }
 
@@ -205,12 +205,24 @@ class PlaylistQuery : ViewModel() {
                         }
                         
                         totalDeleted += d
-                        Log.d(TAG, "removeFromPlaylist [VER 6]: Deleted record $id - result: $d")
+                        Log.d(TAG, "removeFromPlaylist [VER 7]: Deleted record $id - result: $d")
+                    }
+                    
+                    // Method C: Fallback to bulk delete by AUDIO_ID if individual deletion failed
+                    if (totalDeleted == 0) {
+                        Log.w(TAG, "removeFromPlaylist [VER 7]: Individual deletion failed, trying bulk delete by AUDIO_ID...")
+                        val d = resolver.delete(
+                            membersUri,
+                            "${MediaStore.Audio.Playlists.Members.AUDIO_ID} = ?",
+                            arrayOf(audioId.toString())
+                        )
+                        totalDeleted += d
+                        Log.d(TAG, "removeFromPlaylist [VER 7]: Bulk deletion result: $d")
                     }
                     
                     totalDeleted > 0
                 } catch (e: Exception) {
-                    Log.e(TAG, "removeFromPlaylist [VER 6]: Error", e)
+                    Log.e(TAG, "removeFromPlaylist [VER 7]: Error", e)
                     false
                 }
             }
