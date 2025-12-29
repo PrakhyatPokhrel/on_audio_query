@@ -90,30 +90,46 @@ class PlaylistController {
         this.resolver = context.contentResolver
         val playlistId = call.argument<Int>("playlistId")!!
         val audioId = call.argument<Int>("audioId")!!
+        
+        Log.d("on_audio_query", "removeFromPlaylist: Starting removal of $audioId from $playlistId")
 
         //Check if Playlist exists based on Id
-        if (!checkPlaylistId(playlistId)) result.success(false)
-        else {
-            try {
-                val uri = MediaStore.Audio.Playlists.Members.getContentUri(
-                    "external",
-                    playlistId.toLong()
-                )
+        if (!checkPlaylistId(playlistId)) {
+            Log.w("on_audio_query", "removeFromPlaylist: Playlist $playlistId not found")
+            result.success(false)
+            return
+        }
+
+        try {
+            val uri = MediaStore.Audio.Playlists.Members.getContentUri(
+                "external",
+                playlistId.toLong()
+            )
+            
+            // Try 1: As Member ID using item URI (Most robust for Android 10+)
+            val itemUri = ContentUris.withAppendedId(uri, audioId.toLong())
+            var deleted = resolver.delete(itemUri, null, null)
+            Log.d("on_audio_query", "removeFromPlaylist: Attempt 1 (Item URI): $deleted rows")
+
+            // Try 2: As Member ID using selection
+            if (deleted == 0) {
                 val where = MediaStore.Audio.Playlists.Members._ID + "=?"
-                val deleted = resolver.delete(uri, where, arrayOf(audioId.toString()))
-
-                // If nothing was deleted using _ID, try using AUDIO_ID.
-                // This handles cases where the user passes the song ID instead of the member ID.
-                if (deleted == 0) {
-                    val whereAudio = MediaStore.Audio.Playlists.Members.AUDIO_ID + "=?"
-                    resolver.delete(uri, whereAudio, arrayOf(audioId.toString()))
-                }
-
-                result.success(true)
-            } catch (e: Exception) {
-                Log.i("on_audio_error: ", e.toString())
-                result.success(false)
+                deleted = resolver.delete(uri, where, arrayOf(audioId.toString()))
+                Log.d("on_audio_query", "removeFromPlaylist: Attempt 2 (_ID selection): $deleted rows")
             }
+
+            // Try 3: As Song ID using selection (Common case where user passes Song ID)
+            if (deleted == 0) {
+                val whereAudio = MediaStore.Audio.Playlists.Members.AUDIO_ID + "=?"
+                deleted = resolver.delete(uri, whereAudio, arrayOf(audioId.toString()))
+                Log.d("on_audio_query", "removeFromPlaylist: Attempt 3 (AUDIO_ID selection): $deleted rows")
+            }
+
+            // Return true if at least one row was deleted
+            result.success(deleted > 0)
+        } catch (e: Exception) {
+            Log.e("on_audio_error", "removeFromPlaylist: Error occurred", e)
+            result.success(false)
         }
     }
 
